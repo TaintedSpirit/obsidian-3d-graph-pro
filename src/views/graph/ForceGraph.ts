@@ -24,6 +24,7 @@ export class ForceGraph {
 	// Per-view transient state
 	private searchText = "";
 	private isFrozen = false;
+	private callbackUnregisterHandles: (() => void)[] = [];
 
 	// Label overlay
 	private labelsOverlay: HTMLElement | null = null;
@@ -45,9 +46,13 @@ export class ForceGraph {
 	// ─── init ────────────────────────────────────────────────────────────────
 
 	private initListeners() {
-		this.plugin.settingsState.onChange(this.onSettingsStateChanged);
+		this.callbackUnregisterHandles.push(
+			this.plugin.settingsState.onChange(this.onSettingsStateChanged)
+		);
 		if (this.isLocalGraph) {
-			this.plugin.openFileState.onChange(this.refreshGraphData);
+			this.callbackUnregisterHandles.push(
+				this.plugin.openFileState.onChange(this.refreshGraphData)
+			);
 		}
 		EventBus.on("graph-changed", this.refreshGraphData);
 		EventBus.on("theme-changed", this.onThemeChanged);
@@ -87,7 +92,8 @@ export class ForceGraph {
 
 	// ─── graph data ──────────────────────────────────────────────────────────
 
-	private getGraphData = (): Graph => {
+	private getGraphData = (): any => {
+		if (!this.plugin.globalGraph) return { nodes: [], links: [] };
 		if (this.isLocalGraph && this.plugin.openFileState.value) {
 			const depth = this.plugin.getSettings().localGraph.depth;
 			this.graph = this.plugin.globalGraph
@@ -408,7 +414,7 @@ export class ForceGraph {
 		if (!this.labelsOverlay || !this.graph) return;
 
 		const camera = (this.instance as any).camera?.() as any;
-		if (!camera) return;
+		if (!camera?.position) return;
 
 		const { x, y, z } = camera.position;
 		if (x === this.lastCameraX && y === this.lastCameraY && z === this.lastCameraZ) return;
@@ -499,9 +505,12 @@ export class ForceGraph {
 	}
 
 	public destroy() {
+		this.callbackUnregisterHandles.forEach((h) => h());
+		this.callbackUnregisterHandles.length = 0;
 		this.clearLabels();
 		this.labelsOverlay?.remove();
 		EventBus.off("graph-changed", this.refreshGraphData);
 		EventBus.off("theme-changed", this.onThemeChanged);
+		(this.instance as any)._destructor?.();
 	}
 }

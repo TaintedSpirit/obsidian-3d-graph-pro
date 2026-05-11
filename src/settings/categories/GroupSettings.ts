@@ -9,10 +9,10 @@ export class GroupSettings {
 
 	public static fromStore(store: any) {
 		return new GroupSettings(
-			store?.groups.flatMap((nodeGroup: any) => {
-				return new NodeGroup(nodeGroup.query, nodeGroup.color);
-			})
-		)
+			store?.groups?.flatMap((nodeGroup: any) =>
+				new NodeGroup(nodeGroup.query, nodeGroup.color)
+			) ?? []
+		);
 	}
 
 	public toObject() {

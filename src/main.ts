@@ -114,8 +114,8 @@ export default class Graph3dPlugin extends Plugin {
 	}
 
 	private onGraphCacheReady = () => {
-		this.cacheIsReady.value = true;
-		this.onGraphCacheChanged();
+		this.onGraphCacheChanged();   // sets globalGraph FIRST
+		this.cacheIsReady.value = true; // THEN fires openQueuedGraphs
 	};
 
 	private onGraphCacheChanged = () => {
