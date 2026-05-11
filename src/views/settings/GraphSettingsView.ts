@@ -1,8 +1,10 @@
 import { TreeItem } from "../atomics/TreeItem";
 import DisplaySettingsView from "./categories/DisplaySettingsView";
+import LocalGraphSettingsView from "./categories/LocalGraphSettingsView";
 import { FilterSettings } from "../../settings/categories/FilterSettings";
 import { GroupSettings } from "../../settings/categories/GroupSettings";
 import { DisplaySettings } from "../../settings/categories/DisplaySettings";
+import { LocalGraphSettings } from "../../settings/categories/LocalGraphSettings";
 import { ExtraButtonComponent } from "obsidian";
 import State, { StateChange } from "../../util/State";
 import EventBus from "../../util/EventBus";
@@ -16,15 +18,16 @@ export class GraphSettingsView extends HTMLDivElement {
 	private graphControls: HTMLDivElement;
 	private readonly settingsState: State<GraphSettings>;
 	private readonly theme: ObsidianTheme;
+	private readonly isLocalGraph: boolean;
 
-	constructor(settingsState: State<GraphSettings>, theme: ObsidianTheme) {
+	constructor(settingsState: State<GraphSettings>, theme: ObsidianTheme, isLocalGraph = false) {
 		super();
 		this.settingsState = settingsState;
 		this.theme = theme;
+		this.isLocalGraph = isLocalGraph;
 	}
 
 	private isCollapsedState = new State(true);
-
 	private callbackUnregisterHandles: (() => void)[] = [];
 
 	async connectedCallback() {
@@ -32,14 +35,12 @@ export class GraphSettingsView extends HTMLDivElement {
 
 		this.settingsButton = new ExtraButtonComponent(this)
 			.setIcon("settings")
-			.setTooltip("Open graph settings")
+			.setTooltip("Graph settings")
 			.onClick(this.onSettingsButtonClicked);
 
 		this.graphControls = this.createDiv({ cls: "graph-controls" });
 
-		this.appendGraphControlsItems(
-			this.graphControls.createDiv({ cls: "control-buttons" })
-		);
+		this.appendGraphControlsItems(this.graphControls.createDiv({ cls: "control-buttons" }));
 
 		this.appendSetting(
 			this.settingsState.createSubState("value.filters", FilterSettings),
@@ -56,13 +57,21 @@ export class GraphSettingsView extends HTMLDivElement {
 			"Display",
 			DisplaySettingsView
 		);
+
+		if (this.isLocalGraph) {
+			this.appendSetting(
+				this.settingsState.createSubState("value.localGraph", LocalGraphSettings),
+				"Local Graph",
+				LocalGraphSettingsView
+			);
+		}
+
 		this.initListeners();
 		this.toggleCollapsed(this.isCollapsedState.value);
 	}
 
 	private initListeners() {
 		EventBus.on("did-reset-settings", () => {
-			// Re append all settings
 			this.disconnectedCallback();
 			this.connectedCallback();
 		});
@@ -71,13 +80,10 @@ export class GraphSettingsView extends HTMLDivElement {
 		);
 	}
 
-	// clicked to collapse/expand
 	private onIsCollapsedChanged = (stateChange: StateChange) => {
-		const collapsed = stateChange.newValue;
-		this.toggleCollapsed(collapsed);
+		this.toggleCollapsed(stateChange.newValue);
 	};
 
-	// toggle the view to collapsed or expanded
 	private toggleCollapsed(collapsed: boolean) {
 		if (collapsed) {
 			this.settingsButton.setDisabled(false);
@@ -89,30 +95,21 @@ export class GraphSettingsView extends HTMLDivElement {
 	}
 
 	private onSettingsButtonClicked = () => {
-		console.log("settings button clicked");
 		this.isCollapsedState.value = !this.isCollapsedState.value;
 	};
 
 	private appendGraphControlsItems(containerEl: HTMLElement) {
-		this.appendResetButton(containerEl);
-		this.appendMinimizeButton(containerEl);
-	}
-
-	private appendResetButton(containerEl: HTMLElement) {
 		new ExtraButtonComponent(containerEl)
 			.setIcon("eraser")
 			.setTooltip("Reset to default")
 			.onClick(() => EventBus.trigger("do-reset-settings"));
-	}
 
-	private appendMinimizeButton(containerEl: HTMLElement) {
 		new ExtraButtonComponent(containerEl)
 			.setIcon("x")
 			.setTooltip("Close")
 			.onClick(() => (this.isCollapsedState.value = true));
 	}
 
-	// utility function to append a setting
 	private appendSetting<S>(
 		setting: S,
 		title: string,
@@ -120,22 +117,19 @@ export class GraphSettingsView extends HTMLDivElement {
 	) {
 		const header = document.createElement("header");
 		header.classList.add("graph-control-section-header");
-		header.innerHTML = title;
-		const item = new TreeItem(header, [
-			(containerEl: HTMLElement) => view(setting, containerEl),
-		]);
+		header.textContent = title;
+		const item = new TreeItem(header, [(containerEl: HTMLElement) => view(setting, containerEl)]);
 		item.classList.add("is-collapsed");
 		this.graphControls.append(item);
 	}
 
 	async disconnectedCallback() {
 		this.empty();
-		this.callbackUnregisterHandles.forEach((handle) => handle());
+		this.callbackUnregisterHandles.forEach((h) => h());
+		this.callbackUnregisterHandles.length = 0;
 	}
 }
 
 if (typeof customElements.get("graph-settings-view") === "undefined") {
-	customElements.define("graph-settings-view", GraphSettingsView, {
-		extends: "div",
-	});
+	customElements.define("graph-settings-view", GraphSettingsView, { extends: "div" });
 }

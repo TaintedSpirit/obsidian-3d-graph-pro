@@ -1,8 +1,8 @@
 {
 	"id": "3d-graph",
 	"name": "3D Graph",
-	"version": "1.0.5",
-	"description": "A 3D Graph for Obsidian",
+	"version": "2.0.0",
+	"description": "A massively improved 3D Graph for Obsidian — search, labels, depth, pin nodes, auto-folder colors",
 	"author": "Alexander Weichart",
 	"authorUrl": "https://github.com/AlexW00",
 	"isDesktopOnly": false

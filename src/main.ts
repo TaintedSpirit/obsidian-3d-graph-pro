@@ -11,23 +11,22 @@ import shallowCompare from "./util/ShallowCompare";
 export default class Graph3dPlugin extends Plugin {
 	_resolvedCache: ResolvedLinkCache;
 
-	// States
 	public settingsState: State<GraphSettings>;
 	public openFileState: State<string | undefined> = new State(undefined);
 	private cacheIsReady: State<boolean> = new State(
 		this.app.metadataCache.resolvedLinks !== undefined
 	);
 
-	// Other properties
 	public globalGraph: Graph;
 	public theme: ObsidianTheme;
-	// Graphs that are waiting for cache to be ready
 	private queuedGraphs: Graph3dView[] = [];
 	private callbackUnregisterHandles: (() => void)[] = [];
+	private themeObserver: MutationObserver | null = null;
 
 	async onload() {
 		await this.init();
 		this.addRibbonIcon("glasses", "3D Graph", this.openGlobalGraph);
+
 		this.addCommand({
 			id: "open-3d-graph-global",
 			name: "Open Global 3D Graph",
@@ -39,44 +38,60 @@ export default class Graph3dPlugin extends Plugin {
 			name: "Open Local 3D Graph",
 			callback: this.openLocalGraph,
 		});
+
+		this.addCommand({
+			id: "open-3d-graph-local-for-active",
+			name: "Open Local 3D Graph for active file",
+			callback: this.openLocalGraph,
+		});
 	}
 
 	private async init() {
 		await this.initStates();
 		this.initListeners();
+		this.initThemeObserver();
 	}
 
 	private async initStates() {
 		const settings = await this.loadSettings();
 		this.settingsState = new State<GraphSettings>(settings);
 		this.theme = new ObsidianTheme(this.app.workspace.containerEl);
-		this.cacheIsReady.value =
-			this.app.metadataCache.resolvedLinks !== undefined;
+		this.cacheIsReady.value = this.app.metadataCache.resolvedLinks !== undefined;
 		this.onGraphCacheChanged();
+	}
+
+	private initThemeObserver() {
+		this.themeObserver = new MutationObserver(() => {
+			this.theme = new ObsidianTheme(this.app.workspace.containerEl);
+			EventBus.trigger("theme-changed");
+		});
+		this.themeObserver.observe(document.body, {
+			attributes: true,
+			attributeFilter: ["class", "data-theme"],
+		});
 	}
 
 	private initListeners() {
 		this.callbackUnregisterHandles.push(
-			// save settings on change
 			this.settingsState.onChange(() => this.saveSettings())
 		);
 
-		// internal event to reset settings to default
 		EventBus.on("do-reset-settings", this.onDoResetSettings);
 
-		// show open local graph button in file menu
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
 				if (!file) return;
 				menu.addItem((item) => {
 					item.setTitle("Open in local 3D Graph")
 						.setIcon("glasses")
-						.onClick(() => this.openLocalGraph());
+						.onClick(() => {
+							this.openFileState.value = file.path;
+							this.openGraph(true);
+						});
 				});
 			})
 		);
 
-		// when a file gets opened, update the open file state
 		this.registerEvent(
 			this.app.workspace.on("file-open", (file) => {
 				if (file) this.openFileState.value = file.path;
@@ -84,63 +99,33 @@ export default class Graph3dPlugin extends Plugin {
 		);
 
 		this.callbackUnregisterHandles.push(
-			// when the cache is ready, open the queued graphs
 			this.cacheIsReady.onChange((isReady) => {
-				if (isReady) {
-					this.openQueuedGraphs();
-				}
+				if (isReady) this.openQueuedGraphs();
 			})
 		);
 
-		// all files are resolved, so the cache is ready:
-		this.app.metadataCache.on(
-			"resolved",
-			this.onGraphCacheReady.bind(this)
-		);
-		// the cache changed:
-		this.app.metadataCache.on(
-			"resolve",
-			this.onGraphCacheChanged.bind(this)
-		);
+		this.app.metadataCache.on("resolved", this.onGraphCacheReady.bind(this));
+		this.app.metadataCache.on("resolve", this.onGraphCacheChanged.bind(this));
 	}
 
-	// opens all queued graphs (graphs get queued if cache isnt ready yet)
 	private openQueuedGraphs() {
 		this.queuedGraphs.forEach((view) => view.showGraph());
 		this.queuedGraphs = [];
 	}
 
 	private onGraphCacheReady = () => {
-		console.log("Graph cache is ready");
 		this.cacheIsReady.value = true;
 		this.onGraphCacheChanged();
 	};
 
 	private onGraphCacheChanged = () => {
-		// check if the cache actually updated
-		// Obsidian API sends a lot of (for this plugin) unnecessary stuff
-		// with the resolve event
 		if (
 			this.cacheIsReady.value &&
-			!shallowCompare(
-				this._resolvedCache,
-				this.app.metadataCache.resolvedLinks
-			)
+			!shallowCompare(this._resolvedCache, this.app.metadataCache.resolvedLinks)
 		) {
-			this._resolvedCache = structuredClone(
-				this.app.metadataCache.resolvedLinks
-			);
+			this._resolvedCache = structuredClone(this.app.metadataCache.resolvedLinks);
 			this.globalGraph = Graph.createFromApp(this.app);
-		} else {
-			console.log(
-				"changed but ",
-				this.cacheIsReady.value,
-				" and ",
-				shallowCompare(
-					this._resolvedCache,
-					this.app.metadataCache.resolvedLinks
-				)
-			);
+			EventBus.trigger("graph-changed");
 		}
 	};
 
@@ -149,24 +134,20 @@ export default class Graph3dPlugin extends Plugin {
 		EventBus.trigger("did-reset-settings");
 	};
 
-	// Opens a local graph view in a new leaf
 	private openLocalGraph = () => {
-		const newFilePath = this.app.workspace.getActiveFile()?.path;
-
-		if (newFilePath) {
-			this.openFileState.value = newFilePath;
+		const path = this.app.workspace.getActiveFile()?.path;
+		if (path) {
+			this.openFileState.value = path;
 			this.openGraph(true);
 		} else {
 			new Notice("No file is currently open");
 		}
 	};
 
-	// Opens a global graph view in the current leaf
 	private openGlobalGraph = () => {
 		this.openGraph(false);
 	};
 
-	// Open a global or local graph
 	private openGraph = (isLocalGraph: boolean) => {
 		const leaf = this.app.workspace.getLeaf(isLocalGraph ? "split" : false);
 		const graphView = new Graph3dView(this, leaf, isLocalGraph);
@@ -178,23 +159,25 @@ export default class Graph3dPlugin extends Plugin {
 		}
 	};
 
+	// Called from ForceGraph right-click context menu
+	public openLocalGraphForPath(path: string) {
+		this.openFileState.value = path;
+		this.openGraph(true);
+	}
+
 	private async loadSettings(): Promise<GraphSettings> {
-		const loadedData = await this.loadData(),
-			settings = GraphSettings.fromStore(loadedData);
-		return settings;
+		const loadedData = await this.loadData();
+		return GraphSettings.fromStore(loadedData);
 	}
 
 	async saveSettings() {
-		console.log(
-			"saveSettings:",
-			this.settingsState.getRawValue().toObject()
-		);
 		await this.saveData(this.settingsState.getRawValue().toObject());
 	}
 
 	onunload() {
 		super.onunload();
-		this.callbackUnregisterHandles.forEach((handle) => handle());
+		this.themeObserver?.disconnect();
+		this.callbackUnregisterHandles.forEach((h) => h());
 		EventBus.off("do-reset-settings", this.onDoResetSettings);
 	}
 
