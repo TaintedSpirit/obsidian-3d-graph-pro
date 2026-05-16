@@ -5,7 +5,7 @@ import { FilterSettings } from "../../settings/categories/FilterSettings";
 import { GroupSettings } from "../../settings/categories/GroupSettings";
 import { DisplaySettings } from "../../settings/categories/DisplaySettings";
 import { LocalGraphSettings } from "../../settings/categories/LocalGraphSettings";
-import { ExtraButtonComponent } from "obsidian";
+import { ExtraButtonComponent, EventRef } from "obsidian";
 import State, { StateChange } from "../../util/State";
 import EventBus from "../../util/EventBus";
 import GroupSettingsView from "./categories/GroupSettingsView";
@@ -13,32 +13,38 @@ import FilterSettingsView from "./categories/FilterSettingsView";
 import GraphSettings from "src/settings/GraphSettings";
 import ObsidianTheme from "src/util/ObsidianTheme";
 
-export class GraphSettingsView extends HTMLDivElement {
+export class GraphSettingsView {
+	public readonly el: HTMLDivElement;
+
 	private settingsButton: ExtraButtonComponent;
-	private graphControls: HTMLDivElement;
+	private graphControls!: HTMLDivElement;
 	private readonly settingsState: State<GraphSettings>;
 	private readonly theme: ObsidianTheme;
 	private readonly isLocalGraph: boolean;
 
+	private isCollapsedState = new State(true);
+	private callbackUnregisterHandles: (() => void)[] = [];
+	private resetRef: EventRef | null = null;
+
 	constructor(settingsState: State<GraphSettings>, theme: ObsidianTheme, isLocalGraph = false) {
-		super();
 		this.settingsState = settingsState;
 		this.theme = theme;
 		this.isLocalGraph = isLocalGraph;
+
+		this.el = document.createElement("div");
+		this.el.classList.add("graph-settings-view");
+
+		this.build();
+		this.resetRef = EventBus.on("did-reset-settings", () => this.rebuild());
 	}
 
-	private isCollapsedState = new State(true);
-	private callbackUnregisterHandles: (() => void)[] = [];
-
-	async connectedCallback() {
-		this.classList.add("graph-settings-view");
-
-		this.settingsButton = new ExtraButtonComponent(this)
+	private build() {
+		this.settingsButton = new ExtraButtonComponent(this.el)
 			.setIcon("settings")
 			.setTooltip("Graph settings")
 			.onClick(this.onSettingsButtonClicked);
 
-		this.graphControls = this.createDiv({ cls: "graph-controls" });
+		this.graphControls = this.el.createDiv({ cls: "graph-controls" });
 
 		this.appendGraphControlsItems(this.graphControls.createDiv({ cls: "control-buttons" }));
 
@@ -66,18 +72,22 @@ export class GraphSettingsView extends HTMLDivElement {
 			);
 		}
 
-		this.initListeners();
-		this.toggleCollapsed(this.isCollapsedState.value);
-	}
-
-	private initListeners() {
-		EventBus.on("did-reset-settings", () => {
-			this.disconnectedCallback();
-			this.connectedCallback();
-		});
 		this.callbackUnregisterHandles.push(
 			this.isCollapsedState.onChange(this.onIsCollapsedChanged)
 		);
+		this.toggleCollapsed(this.isCollapsedState.value);
+	}
+
+	private rebuild() {
+		this.teardown();
+		this.el.empty();
+		this.isCollapsedState = new State(true);
+		this.build();
+	}
+
+	private teardown() {
+		this.callbackUnregisterHandles.forEach((h) => h());
+		this.callbackUnregisterHandles.length = 0;
 	}
 
 	private onIsCollapsedChanged = (stateChange: StateChange) => {
@@ -123,13 +133,13 @@ export class GraphSettingsView extends HTMLDivElement {
 		this.graphControls.append(item);
 	}
 
-	async disconnectedCallback() {
-		this.empty();
-		this.callbackUnregisterHandles.forEach((h) => h());
-		this.callbackUnregisterHandles.length = 0;
+	public destroy() {
+		this.teardown();
+		if (this.resetRef) {
+			EventBus.offref(this.resetRef);
+			this.resetRef = null;
+		}
+		this.el.empty();
+		this.el.remove();
 	}
-}
-
-if (typeof customElements.get("graph-settings-view") === "undefined") {
-	customElements.define("graph-settings-view", GraphSettingsView, { extends: "div" });
 }
