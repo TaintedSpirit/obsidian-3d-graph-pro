@@ -5,6 +5,7 @@ import Graph3dPlugin from "src/main";
 
 export class Graph3dView extends ItemView {
 	private forceGraph: ForceGraph;
+	private settingsView: GraphSettingsView | null = null;
 	private readonly isLocalGraph: boolean;
 	private readonly plugin: Graph3dPlugin;
 
@@ -20,6 +21,8 @@ export class Graph3dView extends ItemView {
 	onunload() {
 		super.onunload();
 		this.forceGraph?.destroy();
+		this.settingsView?.destroy();
+		this.settingsView = null;
 	}
 
 	showGraph() {
@@ -34,12 +37,12 @@ export class Graph3dView extends ItemView {
 		this.appendGraph(viewContent);
 		this.appendHUD(viewContent);
 
-		const settings = new GraphSettingsView(
+		this.settingsView = new GraphSettingsView(
 			this.plugin.settingsState,
 			this.plugin.theme,
 			this.isLocalGraph
 		);
-		viewContent.appendChild(settings);
+		viewContent.appendChild(this.settingsView.el);
 	}
 
 	getDisplayText(): string {
