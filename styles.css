@@ -5,6 +5,32 @@
 	position: relative;
 	overflow: hidden !important;
 	outline: none;
+	/* Deep-space nebula backdrop behind the transparent WebGL canvas */
+	background-color: #04050c;
+	background-image:
+		radial-gradient(circle at 18% 26%, rgba(150, 75, 220, 0.30) 0%, rgba(150, 75, 220, 0) 42%),
+		radial-gradient(circle at 82% 20%, rgba(40, 110, 220, 0.28) 0%, rgba(40, 110, 220, 0) 45%),
+		radial-gradient(circle at 72% 78%, rgba(220, 60, 140, 0.24) 0%, rgba(220, 60, 140, 0) 46%),
+		radial-gradient(circle at 30% 80%, rgba(40, 180, 200, 0.20) 0%, rgba(40, 180, 200, 0) 44%),
+		radial-gradient(circle at 50% 50%, rgba(20, 24, 60, 0.55) 0%, rgba(4, 5, 12, 0.9) 75%);
+	background-size: 180% 180%, 180% 180%, 180% 180%, 180% 180%, 100% 100%;
+	background-position: 0% 0%;
+	animation: graph3d-nebula-drift 90s ease-in-out infinite alternate;
+}
+
+/* Corner vignette to deepen the void */
+.graph-3d-view::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 1;
+	background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+@keyframes graph3d-nebula-drift {
+	0% { background-position: 0% 0%, 100% 0%, 100% 100%, 0% 100%, 50% 50%; }
+	100% { background-position: 12% 8%, 88% 10%, 86% 90%, 14% 88%, 50% 50%; }
 }
 
 .graph-3d-view .scene-nav-info {
@@ -118,22 +144,26 @@
 	pointer-events: none;
 	font-family: var(--font-interface);
 	font-weight: 500;
+	/* Luminous label glow tinted by the star color (currentColor) */
 	text-shadow:
-		0 1px 3px var(--background-primary),
-		0 0 8px var(--background-primary);
-	opacity: 0.9;
+		0 0 4px rgba(0, 0, 0, 0.9),
+		0 0 10px currentColor,
+		0 0 18px currentColor;
+	opacity: 0.92;
 	transition: opacity 0.1s;
 }
 
 /* ── Node Tooltip ──────────────────────────────────────────────────────────── */
 
 .node-tooltip {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
+	/* Glassy deep-space tooltip */
+	background: rgba(10, 12, 28, 0.82);
+	backdrop-filter: blur(6px);
+	border: 1px solid rgba(120, 150, 255, 0.35);
 	border-radius: 8px;
 	padding: 10px 13px;
 	max-width: 240px;
-	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 18px rgba(90, 120, 255, 0.25);
 	font-family: var(--font-interface);
 }
 

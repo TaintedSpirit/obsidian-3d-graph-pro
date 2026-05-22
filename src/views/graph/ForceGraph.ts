@@ -1,4 +1,5 @@
 import ForceGraph3D, { ForceGraph3DInstance } from "3d-force-graph";
+import * as THREE from "three";
 import Node from "../../graph/Node";
 import Link from "../../graph/Link";
 import { StateChange } from "../../util/State";
@@ -33,6 +34,15 @@ export class ForceGraph {
 	private lastCameraY = 0;
 	private lastCameraZ = 0;
 
+	// Space makeover (starfield / nebula / glowing star nodes)
+	private starGroup: any = null;
+	private nebula: any = null;
+	private spaceScene: any = null;
+	private spaceRAF: number | null = null;
+	private spaceRetry = 0;
+	private spaceDisposables: { dispose: () => void }[] = [];
+	private glowTexture: any = null;
+
 	constructor(plugin: Graph3dPlugin, rootHtmlElement: HTMLElement, isLocalGraph: boolean) {
 		this.rootHtmlElement = rootHtmlElement;
 		this.isLocalGraph = isLocalGraph;
@@ -62,6 +72,7 @@ export class ForceGraph {
 		this.createInstance();
 		this.createNodes();
 		this.createLinks();
+		this.setupSpaceScene();
 	}
 
 	private createInstance() {
@@ -204,32 +215,231 @@ export class ForceGraph {
 			.nodeColor((node: Node) => this.getNodeColor(node))
 			.nodeVal((node: Node) => this.getNodeVal(node))
 			.nodeVisibility(this.doShowNode)
+			.nodeThreeObject((node: Node) => this.makeNodeObject(node))
+			.nodeThreeObjectExtend(false)
 			.onNodeHover(this.onNodeHover)
 			.onNodeRightClick(this.onNodeRightClick)
 			.onNodeClick(this.onNodeClick);
 	};
 
 	private createLinks = () => {
+		const display = this.plugin.getSettings().display;
 		this.instance
 			.linkWidth((link: Link) =>
 				this.isHighlightedLink(link)
-					? this.plugin.getSettings().display.linkThickness * 2
-					: this.plugin.getSettings().display.linkThickness
+					? display.linkThickness * 2
+					: display.linkThickness
 			)
+			.linkOpacity(0.32)
 			.linkDirectionalParticles((link: Link) =>
-				this.isHighlightedLink(link)
-					? this.plugin.getSettings().display.particleCount
-					: 0
+				this.isHighlightedLink(link) ? display.particleCount : 1
 			)
-			.linkDirectionalParticleWidth(this.plugin.getSettings().display.particleSize)
+			.linkDirectionalParticleSpeed(0.006)
+			.linkDirectionalParticleWidth(display.particleSize)
+			.linkDirectionalParticleColor((link: Link) =>
+				this.isHighlightedLink(link) ? this.plugin.theme.textAccent : "#bcd4ff"
+			)
 			.linkVisibility(this.doShowLink)
 			.onLinkHover(this.onLinkHover)
 			.linkColor((link: Link) =>
-				this.isHighlightedLink(link)
-					? this.plugin.theme.textAccent
-					: this.plugin.theme.textFaint
+				this.isHighlightedLink(link) ? this.plugin.theme.textAccent : "#3b4d80"
 			);
 	};
+
+	// ─── space scene (starfield / nebula / glowing star nodes) ─────────────────
+
+	private getPalette(): string[] {
+		const groups = this.plugin.getSettings().groups?.groups ?? [];
+		const cols = groups.map((g) => g.color).filter(Boolean);
+		return cols.length
+			? cols
+			: ["#61afef", "#c678dd", "#56b6c2", "#e5c07b", "#e06c75", "#98c379"];
+	}
+
+	private getStarColor(node: Node): string {
+		const c = this.getNodeColor(node);
+		if (!c || c === this.plugin.theme.textMuted || c === this.plugin.theme.textFaint) {
+			return "#cfe0ff";
+		}
+		return this.toSolidColor(c);
+	}
+
+	// THREE.Color ignores (and warns about) alpha; drop it from rgba() theme colors.
+	private toSolidColor(c: string): string {
+		const m = c.match(/^rgba?\(([^)]+)\)/i);
+		if (m) {
+			const p = m[1].split(",").map((s) => s.trim());
+			return `rgb(${p[0]}, ${p[1]}, ${p[2]})`;
+		}
+		return c;
+	}
+
+	private getGlowTexture(): any {
+		if (this.glowTexture) return this.glowTexture;
+		const size = 128;
+		const cv = document.createElement("canvas");
+		cv.width = cv.height = size;
+		const ctx = cv.getContext("2d")!;
+		const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+		g.addColorStop(0, "rgba(255,255,255,1)");
+		g.addColorStop(0.22, "rgba(255,255,255,0.85)");
+		g.addColorStop(0.45, "rgba(255,255,255,0.30)");
+		g.addColorStop(1, "rgba(255,255,255,0)");
+		ctx.fillStyle = g;
+		ctx.fillRect(0, 0, size, size);
+		const tex = new THREE.Texture(cv);
+		tex.needsUpdate = true;
+		this.glowTexture = tex;
+		return tex;
+	}
+
+	private makeNodeObject(node: Node): any {
+		const tex = this.getGlowTexture();
+		const mat = new THREE.SpriteMaterial({
+			map: tex,
+			color: new THREE.Color(this.getStarColor(node)),
+			blending: THREE.AdditiveBlending,
+			transparent: true,
+			depthWrite: false,
+		});
+		const sprite = new THREE.Sprite(mat);
+		const val = this.getNodeVal(node) || 1;
+		const baseSize = this.plugin.getSettings().display.nodeSize || 4;
+		const s = baseSize * 2.4 * Math.cbrt(val);
+		sprite.scale.set(s, s, 1);
+		(node as any).__starSprite = sprite;
+		return sprite;
+	}
+
+	private applyNodeColor(node: Node) {
+		const sprite = (node as any).__starSprite;
+		if (sprite && sprite.material) {
+			sprite.material.color.set(this.getStarColor(node));
+		}
+	}
+
+	private recolorAllNodes() {
+		this.graph?.nodes.forEach((n: Node) => this.applyNodeColor(n));
+	}
+
+	private setupSpaceScene = () => {
+		const scene = (this.instance as any).scene?.();
+		if (!scene) {
+			this.spaceRetry += 1;
+			if (this.spaceRetry < 120) requestAnimationFrame(this.setupSpaceScene);
+			return;
+		}
+		if (this.starGroup) return;
+
+		this.spaceScene = scene;
+		const palette = this.getPalette();
+		const tex = this.getGlowTexture();
+		this.spaceDisposables = [];
+
+		// Starfield — additive Points scattered in a spherical shell
+		const starCount = 2500;
+		const positions = new Float32Array(starCount * 3);
+		const colors = new Float32Array(starCount * 3);
+		const tmp = new THREE.Color();
+		for (let i = 0; i < starCount; i++) {
+			const r = 2200 + Math.random() * 4000;
+			const theta = Math.random() * Math.PI * 2;
+			const phi = Math.acos(2 * Math.random() - 1);
+			positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+			positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+			positions[i * 3 + 2] = r * Math.cos(phi);
+			if (Math.random() < 0.35) tmp.set(palette[(Math.random() * palette.length) | 0]);
+			else tmp.set("#ffffff");
+			const b = 0.6 + Math.random() * 0.4;
+			colors[i * 3] = tmp.r * b;
+			colors[i * 3 + 1] = tmp.g * b;
+			colors[i * 3 + 2] = tmp.b * b;
+		}
+		const starGeo = new THREE.BufferGeometry();
+		starGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+		starGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+		const starMat = new THREE.PointsMaterial({
+			size: 36,
+			map: tex,
+			vertexColors: true,
+			blending: THREE.AdditiveBlending,
+			transparent: true,
+			depthWrite: false,
+			sizeAttenuation: true,
+		});
+		const stars = new THREE.Points(starGeo, starMat);
+		const starGroup = new THREE.Group();
+		starGroup.add(stars);
+		scene.add(starGroup);
+		this.starGroup = starGroup;
+		this.spaceDisposables.push(starGeo, starMat);
+
+		// Nebula — large faint additive sprites tinted from the folder palette
+		const nebula = new THREE.Group();
+		for (let i = 0; i < 6; i++) {
+			const col = palette[(Math.random() * palette.length) | 0];
+			const nm = new THREE.SpriteMaterial({
+				map: tex,
+				color: new THREE.Color(col),
+				blending: THREE.AdditiveBlending,
+				transparent: true,
+				opacity: 0.13,
+				depthWrite: false,
+			});
+			const sp = new THREE.Sprite(nm);
+			const d = 1500 + Math.random() * 2200;
+			const th = Math.random() * Math.PI * 2;
+			const ph = Math.acos(2 * Math.random() - 1);
+			sp.position.set(
+				d * Math.sin(ph) * Math.cos(th),
+				d * Math.sin(ph) * Math.sin(th),
+				d * Math.cos(ph)
+			);
+			const sc = 2200 + Math.random() * 2000;
+			sp.scale.set(sc, sc, 1);
+			nebula.add(sp);
+			this.spaceDisposables.push(nm);
+		}
+		scene.add(nebula);
+		this.nebula = nebula;
+
+		// Subtle depth fog (low density so the far starfield survives)
+		scene.fog = new THREE.FogExp2(new THREE.Color("#05060f").getHex(), 0.00007);
+
+		// Rebuild node objects now that full THREE is ready, then drift the field
+		this.instance
+			.nodeThreeObject((node: Node) => this.makeNodeObject(node))
+			.nodeThreeObjectExtend(false);
+
+		const animate = () => {
+			if (this.starGroup) this.starGroup.rotation.y += 0.00012;
+			if (this.nebula) this.nebula.rotation.y -= 0.00007;
+			this.spaceRAF = requestAnimationFrame(animate);
+		};
+		this.spaceRAF = requestAnimationFrame(animate);
+	};
+
+	private teardownSpaceScene() {
+		if (this.spaceRAF !== null) cancelAnimationFrame(this.spaceRAF);
+		this.spaceRAF = null;
+		try {
+			const scene = this.spaceScene;
+			if (scene) {
+				if (this.starGroup) scene.remove(this.starGroup);
+				if (this.nebula) scene.remove(this.nebula);
+				scene.fog = null;
+			}
+			this.spaceDisposables.forEach((d) => d?.dispose?.());
+			this.glowTexture?.dispose?.();
+		} catch (e) {
+			/* noop */
+		}
+		this.starGroup = null;
+		this.nebula = null;
+		this.spaceScene = null;
+		this.spaceDisposables = [];
+		this.glowTexture = null;
+	}
 
 	// ─── highlights ──────────────────────────────────────────────────────────
 
@@ -265,10 +475,11 @@ export class ForceGraph {
 	};
 
 	private updateHighlight() {
+		this.recolorAllNodes();
 		this.instance
-			.nodeColor(this.instance.nodeColor())
 			.linkColor(this.instance.linkColor())
-			.linkDirectionalParticles(this.instance.linkDirectionalParticles());
+			.linkDirectionalParticles(this.instance.linkDirectionalParticles())
+			.linkDirectionalParticleColor(this.instance.linkDirectionalParticleColor());
 	}
 
 	private isHighlightedNode = (node: Node): boolean => this.highlightedNodes.has(node.id);
@@ -363,7 +574,7 @@ export class ForceGraph {
 
 	public setSearch(text: string) {
 		this.searchText = text;
-		this.instance.nodeColor(this.instance.nodeColor());
+		this.recolorAllNodes();
 
 		if (!text) return;
 
@@ -511,6 +722,7 @@ export class ForceGraph {
 		this.labelsOverlay?.remove();
 		EventBus.off("graph-changed", this.refreshGraphData);
 		EventBus.off("theme-changed", this.onThemeChanged);
+		this.teardownSpaceScene();
 		(this.instance as any)._destructor?.();
 	}
 }
