@@ -136,6 +136,9 @@ export class ForceGraph {
 			this.instance.linkDirectionalParticleWidth(data.newValue);
 		} else if (path === "display.showLabels") {
 			if (!data.newValue) this.clearLabels();
+		} else if (path === "display.blackBackground") {
+			this.applyBackgroundMode();
+			return;
 		} else if (path === "localGraph.depth" && this.isLocalGraph) {
 			this.refreshGraphData();
 			return;
@@ -445,6 +448,8 @@ export class ForceGraph {
 			.nodeThreeObject((node: Node) => this.makeNodeObject(node))
 			.nodeThreeObjectExtend(false);
 
+		this.applyBackgroundMode();
+
 		const animate = () => {
 			if (this.starGroup) this.starGroup.rotation.y += 0.00012;
 			if (this.nebula) this.nebula.rotation.y -= 0.00007;
@@ -452,6 +457,14 @@ export class ForceGraph {
 		};
 		this.spaceRAF = requestAnimationFrame(animate);
 	};
+
+	// Toggle between the colorful nebula backdrop and a pure black void.
+	private applyBackgroundMode() {
+		const black = this.plugin.getSettings().display.blackBackground;
+		this.rootHtmlElement.classList.toggle("is-black-bg", black);
+		if (this.nebula) this.nebula.visible = !black;
+		if (this.spaceScene?.fog) this.spaceScene.fog.color.set(black ? "#000000" : "#05060f");
+	}
 
 	// Build a small space/nebula environment map so the crystal orbs get crisp
 	// reflections + image-based lighting. Best-effort: if anything fails the orbs

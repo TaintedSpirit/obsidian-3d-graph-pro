@@ -17,6 +17,15 @@ const DisplaySettingsView = (
 	ParticleCountSetting(displaySettings, containerEl);
 	ShowLabelsSetting(displaySettings, containerEl);
 	LabelSizeSetting(displaySettings, containerEl);
+	BlackBackgroundSetting(displaySettings, containerEl);
+};
+
+const BlackBackgroundSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	new Setting(containerEl).setName("Pure black background").addToggle((toggle) => {
+		toggle.setValue(displaySettings.value.blackBackground).onChange((value) => {
+			displaySettings.value.blackBackground = value;
+		});
+	});
 };
 
 const NodeSizeSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {

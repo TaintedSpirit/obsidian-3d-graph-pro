@@ -6,6 +6,7 @@ export class DisplaySettings {
 	showLabels = false;
 	labelSize = 4;
 	nodeScale: "uniform" | "degree" = "uniform";
+	blackBackground = false;
 
 	constructor(
 		nodeSize?: number,
@@ -15,6 +16,7 @@ export class DisplaySettings {
 		showLabels?: boolean,
 		labelSize?: number,
 		nodeScale?: "uniform" | "degree",
+		blackBackground?: boolean,
 	) {
 		this.nodeSize = nodeSize ?? this.nodeSize;
 		this.linkThickness = linkThickness ?? this.linkThickness;
@@ -23,6 +25,7 @@ export class DisplaySettings {
 		this.showLabels = showLabels ?? this.showLabels;
 		this.labelSize = labelSize ?? this.labelSize;
 		this.nodeScale = nodeScale ?? this.nodeScale;
+		this.blackBackground = blackBackground ?? this.blackBackground;
 	}
 
 	public static fromStore(store: any) {
@@ -34,6 +37,7 @@ export class DisplaySettings {
 			store?.showLabels,
 			store?.labelSize,
 			store?.nodeScale,
+			store?.blackBackground,
 		);
 	}
 
@@ -46,6 +50,7 @@ export class DisplaySettings {
 			showLabels: this.showLabels,
 			labelSize: this.labelSize,
 			nodeScale: this.nodeScale,
+			blackBackground: this.blackBackground,
 		};
 	}
 }

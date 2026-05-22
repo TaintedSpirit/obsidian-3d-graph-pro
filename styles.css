@@ -33,6 +33,16 @@
 	100% { background-position: 12% 8%, 88% 10%, 86% 90%, 14% 88%, 50% 50%; }
 }
 
+/* "Pure black background" toggle — solid black void, no nebula gradient/vignette/drift */
+.graph-3d-view.is-black-bg {
+	background: #000 !important;
+	animation: none;
+}
+
+.graph-3d-view.is-black-bg::after {
+	content: none;
+}
+
 .graph-3d-view .scene-nav-info {
 	display: none;
 	visibility: hidden;
