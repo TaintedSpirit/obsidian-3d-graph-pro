@@ -42,6 +42,8 @@ export class ForceGraph {
 	private spaceRetry = 0;
 	private spaceDisposables: { dispose: () => void }[] = [];
 	private glowTexture: any = null;
+	private orbGeometry: any = null;
+	private envRT: any = null;
 
 	constructor(plugin: Graph3dPlugin, rootHtmlElement: HTMLElement, isLocalGraph: boolean) {
 		this.rootHtmlElement = rootHtmlElement;
@@ -294,28 +296,59 @@ export class ForceGraph {
 	}
 
 	private makeNodeObject(node: Node): any {
-		const tex = this.getGlowTexture();
-		const mat = new THREE.SpriteMaterial({
-			map: tex,
-			color: new THREE.Color(this.getStarColor(node)),
-			blending: THREE.AdditiveBlending,
-			transparent: true,
-			depthWrite: false,
-		});
-		const sprite = new THREE.Sprite(mat);
+		if (!this.orbGeometry) this.orbGeometry = new THREE.SphereGeometry(1, 24, 24);
+
+		const color = new THREE.Color(this.getStarColor(node));
 		const val = this.getNodeVal(node) || 1;
 		const baseSize = this.plugin.getSettings().display.nodeSize || 4;
-		const s = baseSize * 2.4 * Math.cbrt(val);
-		sprite.scale.set(s, s, 1);
-		(node as any).__starSprite = sprite;
-		return sprite;
+		const r = baseSize * 1.15 * Math.cbrt(val);
+
+		const group = new THREE.Group();
+
+		// Glossy crystal-ball body: clear-coated glass with a faint inner glow so it
+		// still reads in the dark scene; reflections come from scene.environment.
+		const orbMat = new THREE.MeshPhysicalMaterial({
+			color: color,
+			emissive: color.clone().multiplyScalar(0.22),
+			roughness: 0.08,
+			metalness: 0.0,
+			clearcoat: 1.0,
+			clearcoatRoughness: 0.06,
+			reflectivity: 1.0,
+			transparent: true,
+			opacity: 0.92,
+		});
+		const orb = new THREE.Mesh(this.orbGeometry, orbMat);
+		orb.scale.setScalar(r);
+		group.add(orb);
+
+		// Tight specular sheen + soft outer glow halo (additive, faces camera)
+		const haloMat = new THREE.SpriteMaterial({
+			map: this.getGlowTexture(),
+			color: color,
+			blending: THREE.AdditiveBlending,
+			transparent: true,
+			opacity: 0.4,
+			depthWrite: false,
+		});
+		const halo = new THREE.Sprite(haloMat);
+		halo.scale.setScalar(r * 2.6);
+		group.add(halo);
+
+		(node as any).__orbMat = orbMat;
+		(node as any).__haloMat = haloMat;
+		return group;
 	}
 
 	private applyNodeColor(node: Node) {
-		const sprite = (node as any).__starSprite;
-		if (sprite && sprite.material) {
-			sprite.material.color.set(this.getStarColor(node));
+		const color = new THREE.Color(this.getStarColor(node));
+		const orbMat = (node as any).__orbMat;
+		const haloMat = (node as any).__haloMat;
+		if (orbMat) {
+			orbMat.color.copy(color);
+			orbMat.emissive.copy(color).multiplyScalar(0.22);
 		}
+		if (haloMat) haloMat.color.copy(color);
 	}
 
 	private recolorAllNodes() {
@@ -332,6 +365,7 @@ export class ForceGraph {
 		if (this.starGroup) return;
 
 		this.spaceScene = scene;
+		this.buildEnvironment(scene);
 		const palette = this.getPalette();
 		const tex = this.getGlowTexture();
 		this.spaceDisposables = [];
@@ -419,6 +453,72 @@ export class ForceGraph {
 		this.spaceRAF = requestAnimationFrame(animate);
 	};
 
+	// Build a small space/nebula environment map so the crystal orbs get crisp
+	// reflections + image-based lighting. Best-effort: if anything fails the orbs
+	// still render glossy from the scene's existing lights.
+	private buildEnvironment(scene: any) {
+		try {
+			const renderer = (this.instance as any).renderer?.();
+			if (!renderer || !(THREE as any).PMREMGenerator) return;
+
+			const w = 512;
+			const h = 256;
+			const cv = document.createElement("canvas");
+			cv.width = w;
+			cv.height = h;
+			const ctx = cv.getContext("2d")!;
+
+			const base = ctx.createLinearGradient(0, 0, 0, h);
+			base.addColorStop(0, "#0b0926");
+			base.addColorStop(0.5, "#171338");
+			base.addColorStop(1, "#05060f");
+			ctx.fillStyle = base;
+			ctx.fillRect(0, 0, w, h);
+
+			// Faint nebula tints drawn from the folder palette
+			const palette = this.getPalette();
+			palette.forEach((c, i) => {
+				const x = ((i + 0.5) / palette.length) * w;
+				const y = h * (0.3 + 0.4 * Math.random());
+				const rad = 90 + Math.random() * 70;
+				const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+				g.addColorStop(0, c);
+				g.addColorStop(1, "rgba(0,0,0,0)");
+				ctx.globalAlpha = 0.35;
+				ctx.fillStyle = g;
+				ctx.fillRect(0, 0, w, h);
+			});
+			ctx.globalAlpha = 1;
+
+			// Bright key highlights → crisp specular glints on the glass
+			const spots: [number, number, number][] = [
+				[w * 0.28, h * 0.3, 46],
+				[w * 0.72, h * 0.24, 30],
+			];
+			spots.forEach(([x, y, rad]) => {
+				const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+				g.addColorStop(0, "rgba(255,255,255,0.95)");
+				g.addColorStop(1, "rgba(255,255,255,0)");
+				ctx.fillStyle = g;
+				ctx.fillRect(0, 0, w, h);
+			});
+
+			const tex = new THREE.Texture(cv);
+			tex.mapping = THREE.EquirectangularReflectionMapping;
+			tex.needsUpdate = true;
+
+			const pmrem = new THREE.PMREMGenerator(renderer);
+			pmrem.compileEquirectangularShader();
+			this.envRT = pmrem.fromEquirectangular(tex);
+			scene.environment = this.envRT.texture;
+
+			tex.dispose();
+			pmrem.dispose();
+		} catch (e) {
+			/* env map is optional */
+		}
+	}
+
 	private teardownSpaceScene() {
 		if (this.spaceRAF !== null) cancelAnimationFrame(this.spaceRAF);
 		this.spaceRAF = null;
@@ -428,9 +528,12 @@ export class ForceGraph {
 				if (this.starGroup) scene.remove(this.starGroup);
 				if (this.nebula) scene.remove(this.nebula);
 				scene.fog = null;
+				scene.environment = null;
 			}
 			this.spaceDisposables.forEach((d) => d?.dispose?.());
 			this.glowTexture?.dispose?.();
+			this.orbGeometry?.dispose?.();
+			this.envRT?.dispose?.();
 		} catch (e) {
 			/* noop */
 		}
@@ -439,6 +542,8 @@ export class ForceGraph {
 		this.spaceScene = null;
 		this.spaceDisposables = [];
 		this.glowTexture = null;
+		this.orbGeometry = null;
+		this.envRT = null;
 	}
 
 	// ─── highlights ──────────────────────────────────────────────────────────
