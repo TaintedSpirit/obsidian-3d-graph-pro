@@ -20,6 +20,7 @@ const FilterSettingsView = (
 
 	new Setting(containerEl)
 		.setName("Path Filter")
+		.setClass("graph-text-setting")
 		.setDesc("Show only nodes matching this text")
 		.addText((text) => {
 			text.setPlaceholder("e.g. Projects/ or .md")

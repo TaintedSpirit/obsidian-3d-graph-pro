@@ -8,6 +8,8 @@ import Graph from "../../graph/Graph";
 import { NodeGroup } from "../../settings/categories/GroupSettings";
 import EventBus from "../../util/EventBus";
 import { Menu } from "obsidian";
+import { forceX, forceY, forceZ } from "d3-force-3d";
+import { computePatternPosition, patternRadius } from "../../util/patterns";
 
 export class ForceGraph {
 	private instance: ForceGraph3DInstance;
@@ -25,6 +27,9 @@ export class ForceGraph {
 	// Per-view transient state
 	private searchText = "";
 	private isFrozen = false;
+	private didInitialFit = false;
+	private initialLayoutApplied = false;
+	private initialFitTimer: number | null = null;
 	private callbackUnregisterHandles: (() => void)[] = [];
 
 	// Label overlay
@@ -36,6 +41,7 @@ export class ForceGraph {
 
 	// Space makeover (starfield / nebula / glowing star nodes)
 	private starGroup: any = null;
+	private starPoints: any = null;
 	private nebula: any = null;
 	private spaceScene: any = null;
 	private spaceRAF: number | null = null;
@@ -75,6 +81,30 @@ export class ForceGraph {
 		this.createNodes();
 		this.createLinks();
 		this.setupSpaceScene();
+
+		// NOTE: do NOT call applyForces()/applyLayout() here. They call
+		// d3ReheatSimulation(), which sets the engine running *before* the library's
+		// (debounced ~100ms) graphData digest has created the d3 simulation
+		// (state.layout). The render loop would then tick an undefined simulation and
+		// throw, killing rendering. We defer the first application to the first
+		// onEngineTick (state.layout guaranteed ready), with the timer below as a
+		// fallback.
+		this.initialFitTimer = window.setTimeout(() => {
+			this.applyInitialLayoutOnce();
+			if (!this.didInitialFit) {
+				this.didInitialFit = true;
+				this.fitCamera(600);
+			}
+		}, 2500);
+	}
+
+	// Apply forces + layout exactly once, after the simulation exists. Safe to call
+	// from the first engine tick or the fallback timer. (applyLayout calls
+	// applyForces internally.)
+	private applyInitialLayoutOnce() {
+		if (this.initialLayoutApplied) return;
+		this.initialLayoutApplied = true;
+		this.applyLayout();
 	}
 
 	private createInstance() {
@@ -89,10 +119,33 @@ export class ForceGraph {
 			.width(width)
 			.height(height);
 
-		// Engine tick hook for label updates
+		// Engine tick hook for label updates. The library calls this from inside
+		// its requestAnimationFrame loop *before* scheduling the next frame, so an
+		// uncaught throw here would kill rendering permanently — never let it throw.
 		(this.instance as any).onEngineTick?.(() => {
-			if (this.plugin.getSettings().display.showLabels) {
-				this.updateLabels();
+			try {
+				// First tick means the library has initialized the simulation, so it's
+				// now safe to apply forces/layout (which reheat the simulation).
+				this.applyInitialLayoutOnce();
+				if (this.plugin.getSettings().display.showLabels) {
+					this.updateLabels();
+				}
+			} catch (e) {
+				/* never break the render loop */
+			}
+		});
+
+		// Frame the graph once the first layout settles, so nodes fill the view
+		// instead of sitting as far-off specks at the library's default distance.
+		// Also guarded — this fires from within the render loop.
+		(this.instance as any).onEngineStop?.(() => {
+			try {
+				if (!this.didInitialFit) {
+					this.didInitialFit = true;
+					this.fitCamera();
+				}
+			} catch (e) {
+				/* never break the render loop */
 			}
 		});
 	}
@@ -121,6 +174,9 @@ export class ForceGraph {
 	public refreshGraphData = () => {
 		this.instance.graphData(this.getGraphData());
 		this.clearLabels();
+		// New node objects after a data change need anchors/forces re-applied;
+		// applyLayout recomputes anchor targets and calls applyForces internally.
+		this.applyLayout();
 	};
 
 	// ─── settings ────────────────────────────────────────────────────────────
@@ -138,6 +194,41 @@ export class ForceGraph {
 			if (!data.newValue) this.clearLabels();
 		} else if (path === "display.blackBackground") {
 			this.applyBackgroundMode();
+			return;
+		} else if (path === "display.linkArrows") {
+			this.instance.linkDirectionalArrowLength(() =>
+				this.plugin.getSettings().display.linkArrows ? 3.5 : 0
+			);
+			return;
+		} else if (path === "display.dimOnHover") {
+			this.updateHighlight();
+			return;
+		} else if (path === "display.showNebula") {
+			this.applyBackgroundMode();
+			return;
+		} else if (path === "display.fogDensity") {
+			if (this.spaceScene?.fog) this.spaceScene.fog.density = 0.00007 * data.newValue;
+			return;
+		} else if (path === "display.starDensity") {
+			this.buildStarfield();
+			return;
+		} else if (path === "display.linkOpacity") {
+			this.instance.linkOpacity(data.newValue);
+			return;
+		} else if (path === "display.nodeOpacity") {
+			this.recolorAllNodes();
+			return;
+		} else if (
+			path === "layout.pattern" ||
+			path === "layout.patternScale" ||
+			path === "layout.enabled"
+		) {
+			// These change which nodes are anchored / where, so recompute the layout
+			// (applyLayout calls applyForces internally).
+			this.applyLayout();
+			return;
+		} else if (path.startsWith("layout.")) {
+			this.applyForces();
 			return;
 		} else if (path === "localGraph.depth" && this.isLocalGraph) {
 			this.refreshGraphData();
@@ -235,7 +326,7 @@ export class ForceGraph {
 					? display.linkThickness * 2
 					: display.linkThickness
 			)
-			.linkOpacity(0.32)
+			.linkOpacity(display.linkOpacity)
 			.linkDirectionalParticles((link: Link) =>
 				this.isHighlightedLink(link) ? display.particleCount : 1
 			)
@@ -244,12 +335,133 @@ export class ForceGraph {
 			.linkDirectionalParticleColor((link: Link) =>
 				this.isHighlightedLink(link) ? this.plugin.theme.textAccent : "#bcd4ff"
 			)
+			.linkDirectionalArrowLength(() =>
+				this.plugin.getSettings().display.linkArrows ? 3.5 : 0
+			)
+			.linkDirectionalArrowRelPos(1)
+			.linkDirectionalArrowColor((link: Link) => this.getLinkColor(link))
 			.linkVisibility(this.doShowLink)
 			.onLinkHover(this.onLinkHover)
-			.linkColor((link: Link) =>
-				this.isHighlightedLink(link) ? this.plugin.theme.textAccent : "#3b4d80"
-			);
+			.linkColor((link: Link) => this.getLinkColor(link));
 	};
+
+	// Link color, dimming non-highlighted links toward the background while a
+	// node/link is hovered (when "Dim others on hover" is enabled).
+	private getLinkColor = (link: Link): string => {
+		if (this.isHighlightedLink(link)) return this.plugin.theme.textAccent;
+		if (this.plugin.getSettings().display.dimOnHover && this.highlightActive()) {
+			return "#16203a";
+		}
+		return "#3b4d80";
+	};
+
+	// ─── forces / layout ───────────────────────────────────────────────────────
+
+	// Reheat the simulation, but only once it actually exists. Reheating sets the
+	// engine running; if the library's (debounced) graphData digest hasn't created
+	// the d3 simulation yet, the render loop would tick an undefined simulation and
+	// crash. `initialLayoutApplied` is set true on the first engine tick, which only
+	// happens after the simulation is ready.
+	private reheat() {
+		if (!this.initialLayoutApplied) return;
+		(this.instance as any).d3ReheatSimulation?.();
+	}
+
+	// Tune the d3 simulation forces, register per-axis plane confinement, and the
+	// per-node pattern anchors. Anchors let a preset "hold its shape" while the
+	// other forces still nudge it. When the layout is disabled, anchors + confine
+	// drop to zero strength → plain force-directed graph.
+	private applyForces() {
+		const L = this.plugin.getSettings().layout;
+
+		const charge: any = this.instance.d3Force("charge");
+		charge?.strength?.(-L.repelForce);
+
+		const center: any = this.instance.d3Force("center");
+		center?.strength?.(L.centerForce);
+
+		const link: any = this.instance.d3Force("link");
+		link?.distance?.(L.linkDistance);
+		link?.strength?.(L.linkForce);
+
+		// Pull nodes toward the x=0 / y=0 / z=0 planes. Strength 0 = no effect;
+		// cranking one (e.g. confineZ) flattens the graph onto the opposite plane.
+		const conf = L.enabled ? 1 : 0;
+		this.instance.d3Force("confineX", forceX(0).strength(L.confineX * conf) as any);
+		this.instance.d3Force("confineY", forceY(0).strength(L.confineY * conf) as any);
+		this.instance.d3Force("confineZ", forceZ(0).strength(L.confineZ * conf) as any);
+
+		// Per-node pattern anchors: pull each anchored node toward its preset slot
+		// (n.__ax/__ay/__az). Strength 0 for non-anchored nodes / when disabled, so
+		// physics mode and the off-toggle are unaffected.
+		const anchorStrength = (n: any) =>
+			L.enabled && n.__hasAnchor ? L.anchorStrength : 0;
+		this.instance.d3Force(
+			"anchorX",
+			forceX((n: any) => n.__ax ?? 0).strength(anchorStrength) as any
+		);
+		this.instance.d3Force(
+			"anchorY",
+			forceY((n: any) => n.__ay ?? 0).strength(anchorStrength) as any
+		);
+		this.instance.d3Force(
+			"anchorZ",
+			forceZ((n: any) => n.__az ?? 0).strength(anchorStrength) as any
+		);
+
+		this.reheat();
+	}
+
+	// Arrange nodes by the selected pattern. A pattern sets a per-node anchor target
+	// (a soft positional force, applied in applyForces) and seeds the node position,
+	// but does NOT hard-pin — so the other forces still nudge/reshape the preset.
+	// "physics" (or layout disabled) clears anchors and runs free force-directed.
+	private applyLayout() {
+		if (!this.graph) return;
+		const L = this.plugin.getSettings().layout;
+		const nodes = this.graph.nodes as any[];
+		const active = L.enabled && L.pattern !== "physics";
+
+		if (!active) {
+			nodes.forEach((n) => {
+				n.__hasAnchor = false;
+				if (!this.pinnedNodes.has(n.id)) {
+					n.fx = undefined;
+					n.fy = undefined;
+					n.fz = undefined;
+				}
+			});
+			this.isFrozen = false;
+			this.instance.cooldownTicks(Infinity);
+			this.applyForces();
+			return;
+		}
+
+		// Anchor every visible node to a deterministic slot (hubs centered), seed its
+		// position there, and leave it unpinned so forces can act on it.
+		nodes.forEach((n) => (n.__hasAnchor = false));
+		const visible = nodes.filter((n) => this.doShowNode(n));
+		visible.sort((a, b) => (b.links?.length ?? 0) - (a.links?.length ?? 0));
+		const radius = patternRadius(visible.length, L.patternScale);
+		visible.forEach((n, i) => {
+			const p = computePatternPosition(L.pattern, i, visible.length, radius);
+			n.__ax = p.x;
+			n.__ay = p.y;
+			n.__az = p.z;
+			n.__hasAnchor = true;
+			if (!this.pinnedNodes.has(n.id)) {
+				n.x = p.x;
+				n.y = p.y;
+				n.z = p.z;
+			}
+		});
+
+		this.isFrozen = false;
+		this.instance.cooldownTicks(Infinity);
+		this.applyForces(); // registers anchor forces + reheats
+		// Coordinates are seeded synchronously, so frame them right away.
+		this.fitCamera(400);
+	}
 
 	// ─── space scene (starfield / nebula / glowing star nodes) ─────────────────
 
@@ -303,7 +515,8 @@ export class ForceGraph {
 
 		const color = new THREE.Color(this.getStarColor(node));
 		const val = this.getNodeVal(node) || 1;
-		const baseSize = this.plugin.getSettings().display.nodeSize || 4;
+		const display = this.plugin.getSettings().display;
+		const baseSize = display.nodeSize || 4;
 		const r = baseSize * 1.15 * Math.cbrt(val);
 
 		const group = new THREE.Group();
@@ -319,7 +532,7 @@ export class ForceGraph {
 			clearcoatRoughness: 0.06,
 			reflectivity: 1.0,
 			transparent: true,
-			opacity: 0.92,
+			opacity: display.nodeOpacity,
 		});
 		const orb = new THREE.Mesh(this.orbGeometry, orbMat);
 		orb.scale.setScalar(r);
@@ -347,11 +560,23 @@ export class ForceGraph {
 		const color = new THREE.Color(this.getStarColor(node));
 		const orbMat = (node as any).__orbMat;
 		const haloMat = (node as any).__haloMat;
+
+		// Dim non-highlighted orbs toward transparent while something is hovered.
+		const display = this.plugin.getSettings().display;
+		const dimmed =
+			display.dimOnHover &&
+			this.highlightActive() &&
+			!this.isHighlightedNode(node);
+
 		if (orbMat) {
 			orbMat.color.copy(color);
-			orbMat.emissive.copy(color).multiplyScalar(0.22);
+			orbMat.emissive.copy(color).multiplyScalar(dimmed ? 0.05 : 0.22);
+			orbMat.opacity = dimmed ? 0.1 : display.nodeOpacity;
 		}
-		if (haloMat) haloMat.color.copy(color);
+		if (haloMat) {
+			haloMat.color.copy(color);
+			haloMat.opacity = dimmed ? 0.04 : 0.4 * (display.nodeOpacity / 0.92);
+		}
 	}
 
 	private recolorAllNodes() {
@@ -369,12 +594,54 @@ export class ForceGraph {
 
 		this.spaceScene = scene;
 		this.buildEnvironment(scene);
-		const palette = this.getPalette();
-		const tex = this.getGlowTexture();
 		this.spaceDisposables = [];
 
 		// Starfield — additive Points scattered in a spherical shell
-		const starCount = 2500;
+		const starGroup = new THREE.Group();
+		scene.add(starGroup);
+		this.starGroup = starGroup;
+		this.buildStarfield();
+
+		// Nebula — large faint additive sprites tinted from the folder palette
+		this.buildNebula(scene);
+
+		// Subtle depth fog (low density so the far starfield survives)
+		const fogDensity = this.plugin.getSettings().display.fogDensity ?? 1;
+		scene.fog = new THREE.FogExp2(new THREE.Color("#05060f").getHex(), 0.00007 * fogDensity);
+
+		// Rebuild node objects now that full THREE is ready, then drift the field
+		this.instance
+			.nodeThreeObject((node: Node) => this.makeNodeObject(node))
+			.nodeThreeObjectExtend(false);
+
+		this.applyBackgroundMode();
+
+		const animate = () => {
+			if (this.starGroup) this.starGroup.rotation.y += 0.00012;
+			if (this.nebula) this.nebula.rotation.y -= 0.00007;
+			this.spaceRAF = requestAnimationFrame(animate);
+		};
+		this.spaceRAF = requestAnimationFrame(animate);
+	};
+
+	// (Re)build the starfield Points, scaled by the "Star density" setting.
+	private buildStarfield() {
+		if (!this.starGroup) return;
+
+		// Remove + dispose any previous star Points so density changes don't leak.
+		if (this.starPoints) {
+			this.starGroup.remove(this.starPoints);
+			this.starPoints.geometry?.dispose?.();
+			this.starPoints.material?.dispose?.();
+			this.starPoints = null;
+		}
+
+		const density = this.plugin.getSettings().display.starDensity ?? 1;
+		const starCount = Math.round(2500 * density);
+		if (starCount <= 0) return;
+
+		const palette = this.getPalette();
+		const tex = this.getGlowTexture();
 		const positions = new Float32Array(starCount * 3);
 		const colors = new Float32Array(starCount * 3);
 		const tmp = new THREE.Color();
@@ -404,14 +671,13 @@ export class ForceGraph {
 			depthWrite: false,
 			sizeAttenuation: true,
 		});
-		const stars = new THREE.Points(starGeo, starMat);
-		const starGroup = new THREE.Group();
-		starGroup.add(stars);
-		scene.add(starGroup);
-		this.starGroup = starGroup;
-		this.spaceDisposables.push(starGeo, starMat);
+		this.starPoints = new THREE.Points(starGeo, starMat);
+		this.starGroup.add(this.starPoints);
+	}
 
-		// Nebula — large faint additive sprites tinted from the folder palette
+	private buildNebula(scene: any) {
+		const palette = this.getPalette();
+		const tex = this.getGlowTexture();
 		const nebula = new THREE.Group();
 		for (let i = 0; i < 6; i++) {
 			const col = palette[(Math.random() * palette.length) | 0];
@@ -439,30 +705,15 @@ export class ForceGraph {
 		}
 		scene.add(nebula);
 		this.nebula = nebula;
-
-		// Subtle depth fog (low density so the far starfield survives)
-		scene.fog = new THREE.FogExp2(new THREE.Color("#05060f").getHex(), 0.00007);
-
-		// Rebuild node objects now that full THREE is ready, then drift the field
-		this.instance
-			.nodeThreeObject((node: Node) => this.makeNodeObject(node))
-			.nodeThreeObjectExtend(false);
-
-		this.applyBackgroundMode();
-
-		const animate = () => {
-			if (this.starGroup) this.starGroup.rotation.y += 0.00012;
-			if (this.nebula) this.nebula.rotation.y -= 0.00007;
-			this.spaceRAF = requestAnimationFrame(animate);
-		};
-		this.spaceRAF = requestAnimationFrame(animate);
-	};
+	}
 
 	// Toggle between the colorful nebula backdrop and a pure black void.
+	// The nebula clouds are also independently toggleable via "Show nebula".
 	private applyBackgroundMode() {
-		const black = this.plugin.getSettings().display.blackBackground;
+		const display = this.plugin.getSettings().display;
+		const black = display.blackBackground;
 		this.rootHtmlElement.classList.toggle("is-black-bg", black);
-		if (this.nebula) this.nebula.visible = !black;
+		if (this.nebula) this.nebula.visible = !black && display.showNebula;
 		if (this.spaceScene?.fog) this.spaceScene.fog.color.set(black ? "#000000" : "#05060f");
 	}
 
@@ -543,6 +794,10 @@ export class ForceGraph {
 				scene.fog = null;
 				scene.environment = null;
 			}
+			if (this.starPoints) {
+				this.starPoints.geometry?.dispose?.();
+				this.starPoints.material?.dispose?.();
+			}
 			this.spaceDisposables.forEach((d) => d?.dispose?.());
 			this.glowTexture?.dispose?.();
 			this.orbGeometry?.dispose?.();
@@ -551,6 +806,7 @@ export class ForceGraph {
 			/* noop */
 		}
 		this.starGroup = null;
+		this.starPoints = null;
 		this.nebula = null;
 		this.spaceScene = null;
 		this.spaceDisposables = [];
@@ -602,6 +858,7 @@ export class ForceGraph {
 
 	private isHighlightedNode = (node: Node): boolean => this.highlightedNodes.has(node.id);
 	private isHighlightedLink = (link: Link): boolean => this.highlightedLinks.has(link);
+	private highlightActive = (): boolean => this.highlightedNodes.size > 0;
 
 	// ─── click handlers ──────────────────────────────────────────────────────
 
@@ -655,6 +912,37 @@ export class ForceGraph {
 	};
 
 	// ─── camera ──────────────────────────────────────────────────────────────
+
+	// Frame the visible nodes so they fill the viewport. Computed from the node
+	// bounding sphere + camera FOV and applied instantly (transitionMs 0), so it
+	// works without waiting on the animation loop.
+	public fitCamera(transitionMs = 0) {
+		if (!this.graph) return;
+		const vis = this.graph.nodes.filter(
+			(n) => this.doShowNode(n) && isFinite((n as any).x)
+		) as any[];
+		if (!vis.length) return;
+
+		let cx = 0, cy = 0, cz = 0;
+		vis.forEach((n) => { cx += n.x; cy += n.y; cz += n.z || 0; });
+		cx /= vis.length; cy /= vis.length; cz /= vis.length;
+
+		let radius = 0;
+		vis.forEach((n) => {
+			radius = Math.max(radius, Math.hypot(n.x - cx, n.y - cy, (n.z || 0) - cz));
+		});
+		radius = Math.max(radius, (this.plugin.getSettings().display.nodeSize || 4) * 6);
+
+		const cam: any = (this.instance as any).camera?.();
+		const fovRad = ((cam?.fov ?? 50) * Math.PI) / 180;
+		const dist = radius / Math.tan(fovRad / 2) * 1.15 + radius * 0.5;
+
+		this.instance.cameraPosition(
+			{ x: cx, y: cy, z: cz + dist },
+			{ x: cx, y: cy, z: cz },
+			transitionMs
+		);
+	}
 
 	public flyToNode(node: Node) {
 		const n = node as any;
@@ -834,6 +1122,7 @@ export class ForceGraph {
 	}
 
 	public destroy() {
+		if (this.initialFitTimer !== null) window.clearTimeout(this.initialFitTimer);
 		this.callbackUnregisterHandles.forEach((h) => h());
 		this.callbackUnregisterHandles.length = 0;
 		this.clearLabels();

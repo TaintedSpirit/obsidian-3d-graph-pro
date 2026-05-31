@@ -4,7 +4,9 @@ import LocalGraphSettingsView from "./categories/LocalGraphSettingsView";
 import { FilterSettings } from "../../settings/categories/FilterSettings";
 import { GroupSettings } from "../../settings/categories/GroupSettings";
 import { DisplaySettings } from "../../settings/categories/DisplaySettings";
+import { LayoutSettings } from "../../settings/categories/LayoutSettings";
 import { LocalGraphSettings } from "../../settings/categories/LocalGraphSettings";
+import LayoutSettingsView from "./categories/LayoutSettingsView";
 import { ExtraButtonComponent, EventRef } from "obsidian";
 import State, { StateChange } from "../../util/State";
 import EventBus from "../../util/EventBus";
@@ -62,6 +64,11 @@ export class GraphSettingsView {
 			this.settingsState.createSubState("value.display", DisplaySettings),
 			"Display",
 			DisplaySettingsView
+		);
+		this.appendSetting(
+			this.settingsState.createSubState("value.layout", LayoutSettings),
+			"Layout",
+			LayoutSettingsView
 		);
 
 		if (this.isLocalGraph) {
@@ -128,7 +135,7 @@ export class GraphSettingsView {
 		const header = document.createElement("header");
 		header.classList.add("graph-control-section-header");
 		header.textContent = title;
-		const item = new TreeItem(header, [(containerEl: HTMLElement) => view(setting, containerEl)]);
+		const item = TreeItem(header, [(containerEl: HTMLElement) => view(setting, containerEl)]);
 		item.classList.add("is-collapsed");
 		this.graphControls.append(item);
 	}

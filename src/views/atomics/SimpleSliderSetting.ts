@@ -30,7 +30,7 @@ export interface SliderStepOptions {
 
 export const DEFAULT_SLIDER_STEP_OPTIONS: SliderStepOptions = {
 	min: 1,
-	max: 20,
+	max: 50,
 	step: 1,
 }
 

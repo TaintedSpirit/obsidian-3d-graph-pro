@@ -17,7 +17,82 @@ const DisplaySettingsView = (
 	ParticleCountSetting(displaySettings, containerEl);
 	ShowLabelsSetting(displaySettings, containerEl);
 	LabelSizeSetting(displaySettings, containerEl);
+	NodeOpacitySetting(displaySettings, containerEl);
+	LinkOpacitySetting(displaySettings, containerEl);
+	LinkArrowsSetting(displaySettings, containerEl);
+	DimOnHoverSetting(displaySettings, containerEl);
 	BlackBackgroundSetting(displaySettings, containerEl);
+	ShowNebulaSetting(displaySettings, containerEl);
+	StarDensitySetting(displaySettings, containerEl);
+	FogDensitySetting(displaySettings, containerEl);
+};
+
+const NodeOpacitySetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	const options: SliderOptions = {
+		name: "Node opacity",
+		value: displaySettings.value.nodeOpacity,
+		stepOptions: { min: 0.1, max: 1, step: 0.02 },
+	};
+	return SimpleSliderSetting(containerEl, options, (value) => {
+		displaySettings.value.nodeOpacity = value;
+	});
+};
+
+const LinkOpacitySetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	const options: SliderOptions = {
+		name: "Link opacity",
+		value: displaySettings.value.linkOpacity,
+		stepOptions: { min: 0.1, max: 1, step: 0.02 },
+	};
+	return SimpleSliderSetting(containerEl, options, (value) => {
+		displaySettings.value.linkOpacity = value;
+	});
+};
+
+const LinkArrowsSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	new Setting(containerEl).setName("Link arrows").addToggle((toggle) => {
+		toggle.setValue(displaySettings.value.linkArrows).onChange((value) => {
+			displaySettings.value.linkArrows = value;
+		});
+	});
+};
+
+const DimOnHoverSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	new Setting(containerEl).setName("Dim others on hover").addToggle((toggle) => {
+		toggle.setValue(displaySettings.value.dimOnHover).onChange((value) => {
+			displaySettings.value.dimOnHover = value;
+		});
+	});
+};
+
+const ShowNebulaSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	new Setting(containerEl).setName("Show nebula").addToggle((toggle) => {
+		toggle.setValue(displaySettings.value.showNebula).onChange((value) => {
+			displaySettings.value.showNebula = value;
+		});
+	});
+};
+
+const StarDensitySetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	const options: SliderOptions = {
+		name: "Star density",
+		value: displaySettings.value.starDensity,
+		stepOptions: { min: 0, max: 5, step: 0.25 },
+	};
+	return SimpleSliderSetting(containerEl, options, (value) => {
+		displaySettings.value.starDensity = value;
+	});
+};
+
+const FogDensitySetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
+	const options: SliderOptions = {
+		name: "Fog",
+		value: displaySettings.value.fogDensity,
+		stepOptions: { min: 0, max: 5, step: 0.25 },
+	};
+	return SimpleSliderSetting(containerEl, options, (value) => {
+		displaySettings.value.fogDensity = value;
+	});
 };
 
 const BlackBackgroundSetting = (displaySettings: State<DisplaySettings>, containerEl: HTMLElement) => {
@@ -54,7 +129,7 @@ const LinkThicknessSetting = (displaySettings: State<DisplaySettings>, container
 	const options: SliderOptions = {
 		name: "Link Thickness",
 		value: displaySettings.value.linkThickness,
-		stepOptions: { min: 0, max: 10, step: 0.5 },
+		stepOptions: { min: 0, max: 25, step: 0.5 },
 	};
 	return SimpleSliderSetting(containerEl, options, (value) => {
 		displaySettings.value.linkThickness = value;
@@ -95,7 +170,7 @@ const LabelSizeSetting = (displaySettings: State<DisplaySettings>, containerEl: 
 	const options: SliderOptions = {
 		name: "Label Size",
 		value: displaySettings.value.labelSize,
-		stepOptions: { min: 1, max: 12, step: 1 },
+		stepOptions: { min: 1, max: 30, step: 1 },
 	};
 	return SimpleSliderSetting(containerEl, options, (value) => {
 		displaySettings.value.labelSize = value;

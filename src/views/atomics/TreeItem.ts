@@ -1,52 +1,33 @@
 export type HtmlBuilder = (containerEl: HTMLElement) => void;
 
-// Collapsable tree item, imitates Obsidian's tree items
-export class TreeItem extends HTMLDivElement {
-	private readonly $inner: HTMLElement;
-	private readonly childrenBuilders: HtmlBuilder[];
+// Collapsible tree item that imitates Obsidian's tree items.
+//
+// Implemented as a plain <div> builder rather than a customized built-in
+// element (`extends HTMLDivElement` + customElements.define). Customized
+// built-ins can only be registered once per window, so when the plugin
+// hot-reloads the fresh module's class is left unregistered and
+// `new TreeItem()` throws "Illegal constructor" — which previously broke the
+// entire graph-options widget after any reload.
+export function TreeItem($inner: HTMLElement, children: HtmlBuilder[]): HTMLDivElement {
+	const root = document.createElement("div");
+	root.classList.add("graph-control-section", "tree-item");
 
-	constructor($inner: HTMLElement, children: HtmlBuilder[]) {
-		super();
-		this.$inner = $inner;
-		this.childrenBuilders = children;
-	}
+	const $self = document.createElement("div");
+	$self.classList.add("tree-item-self");
+	$self.addEventListener("click", () => {
+		root.classList.toggle("is-collapsed");
+	});
 
-	async connectedCallback() {
-		this.appendSelf();
-		this.appendChildren();
-	}
+	const $innerWrap = document.createElement("div");
+	$innerWrap.classList.add("tree-item-inner");
+	$innerWrap.append($inner);
+	$self.append($innerWrap);
+	root.append($self);
 
-	private appendSelf = () => {
-		["graph-control-section", "tree-item"].forEach((className) =>
-			this.classList.add(className)
-		);
+	const $children = document.createElement("div");
+	$children.classList.add("tree-item-children");
+	children.forEach((build) => build($children));
+	root.append($children);
 
-		const $self = createDiv({ cls: "tree-item-self" });
-
-		$self.addEventListener("click", () => {
-			this.toggleCollapse();
-		});
-
-		const $inner = createDiv({ cls: "tree-item-inner" });
-		$inner.append(this.$inner);
-		$self.append($inner);
-		this.append($self);
-	};
-
-	private appendChildren = () => {
-		const $children = createDiv({ cls: "tree-item-children" });
-		this.childrenBuilders.forEach((build: HtmlBuilder) => build($children));
-		this.append($children);
-	};
-
-	private toggleCollapse = (doCollapse?: boolean) => {
-		if (doCollapse === undefined) {
-			doCollapse = !this.classList.contains("is-collapsed");
-		}
-		this.classList.toggle("is-collapsed", doCollapse);
-	};
-}
-
-if (typeof customElements.get("tree-item") === "undefined") {
-	customElements.define("tree-item", TreeItem, { extends: "div" });
+	return root;
 }

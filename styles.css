@@ -378,3 +378,21 @@
 	width: 120px;
 	font-size: 12px;
 }
+
+/* Text-input settings (e.g. Path Filter) stack vertically so the label and
+   description get the full panel width instead of being crushed into a sliver
+   next to the input. */
+.graph-3d-view .setting-item.graph-text-setting {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.graph-3d-view .setting-item.graph-text-setting .setting-item-control {
+	width: 100%;
+	justify-content: flex-start;
+}
+
+.graph-3d-view .setting-item.graph-text-setting .setting-item-control input[type="text"] {
+	width: 100%;
+}
